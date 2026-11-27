@@ -1,0 +1,21 @@
+{
+  "usage": "VENTE",
+  "bien": "BIN0421",
+  "contexte_complet": true,
+  "hypotheses": [],
+  "formats": ["principal", "ig45", "story"],
+  "sortie": "sortie/BIN0421",
+  "photos": [
+    {"nn": 1, "piece": "SEJOUR", "fichier": "photos/IMG_1001.dng",
+     "brackets": ["photos/IMG_1002.dng", "photos/IMG_1003.dng"]},
+    {"nn": 2, "piece": "CUISINE", "fichier": "photos/IMG_1010.heic",
+     "balance_blancs": {"methode": "patch", "zone": [1810, 920, 60, 60]},
+     "suppressions": [{"masque": "masques/IMG_1010_cable.png", "objet": "câble", "touche_structure": false}]},
+    {"nn": 3, "piece": "CHAMBRE", "fichier": "photos/IMG_1020.jpg", "orange": ["staging"], "piece_vide": true,
+     "outil_generatif": "nom de l'outil utilisé par l'opérateur"},
+    {"nn": 4, "piece": "CHAMBRE", "fichier": "photos/IMG_1021.jpg", "role": "photo_vide"},
+    {"nn": 5, "piece": "TERRASSE", "fichier": "photos/IMG_1030.jpg", "exterieur": true,
+     "flous": [[2210, 1340, 180, 60]], "orange": ["ciel"], "outil_generatif": "outil externe (opérateur)",
+     "rouge_demande": ["environnement"]}
+  ]
+}

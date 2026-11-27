@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/samples_dl/
+tests/icc_dl/
+tests/_out/
+sortie/
+*.dng
+*.DNG
+*.heic
+*.HEIC
