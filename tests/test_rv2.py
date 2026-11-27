@@ -309,10 +309,12 @@ def test_pipeline_bout_en_bout(tmp_path, exiftool_tag):
     assert all("erreur" not in r for r in res["photos"]), res["photos"]
     assert (out / "VENTE_BIN0421_01_SEJOUR_v1.jpg").exists() and (out / "ig45" / "VENTE_BIN0421_03_TERRASSE_v1.jpg").exists()
     assert (out / "originaux" / "ORIG_IMG_1.jpg").exists()
-    assert r1["classe"] == "VERT" and r1["audit"]["metadonnees_icc"] == "OK"
+    assert r1["classe"] == "VERT" and r1["audit"]["metadonnees_icc"].startswith("OK")
+    assert not r1.get("points_humains")                       # plus aucun point laissé « À VALIDER (humain) »
+    assert r1["audit"]["invariants_§3"].startswith(("OK", "ÉCHEC")) and r1["audit"]["artefacts"].startswith(("OK", "ÉCHEC"))
     assert any("rotation" in x for x in r1["retouches"])
     assert r2["classe"] == "VERT" and any("suppression" in x for x in r2["retouches"])
-    assert r3["mention"] == "Photo retouchée – ciel modifié" and r3["audit"]["mention_orange"] == "OK"
+    assert r3["mention"] == "Photo retouchée – ciel modifié" and r3["audit"]["mention_orange"].startswith("OK")
     assert r3["refus"] and r3["refus"][0]["demande"] == "environnement"
     md = (out / "RAPPORT.md").read_text()
     assert md.startswith("**Mode A") and md.count("| 0") == 3

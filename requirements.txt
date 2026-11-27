@@ -4,3 +4,4 @@ opencv-python-headless>=4.10
 rawpy>=0.21
 pillow-heif>=0.18
 pytest>=8
+lensfunpy>=1.15

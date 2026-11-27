@@ -10,4 +10,5 @@ elif command -v brew >/dev/null; then
   brew install exiftool ffmpeg tesseract tesseract-lang
 fi
 python3 -m pip install --quiet -r requirements.txt
+python3 -m rv2 models
 python3 -m rv2 selfcheck

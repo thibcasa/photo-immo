@@ -167,10 +167,27 @@ def exposure(img: np.ndarray, ev: float) -> np.ndarray:
     return linear_to_srgb(_shoulder(lin))
 
 
-def auto_exposure(img: np.ndarray, target_median: float = 0.46, max_ev: float = 1.5) -> tuple[np.ndarray, dict]:
-    """Cherche l'EV qui amène la luminance médiane à la cible, sans augmenter les brûlés de plus de 0,5 pt."""
+EXPO_MEDIANE_MIN = 0.46   # en dessous : sous-exposée → on remonte vers cette cible
+BRULES_RECUP_PCT = 1.0    # au-dessus : hautes lumières brûlées → on peut baisser (max −0,5 EV)
+
+
+def auto_exposure(img: np.ndarray, target_median: float = EXPO_MEDIANE_MIN, max_ev: float = 1.5) -> tuple[np.ndarray, dict]:
+    """Asymétrique (constaté sur photo réelle : viser une médiane fixe ASSOMBRISSAIT un séjour lumineux
+    bien exposé) :
+      - sous-exposée (médiane < cible) → remontée jusqu'à la cible, sans ajouter > 0,5 pt de brûlés ;
+      - brûlés > 1 % → baisse jusqu'à ≤ 1 % de brûlés, limitée à −0,5 EV ;
+      - sinon : aucune correction (l'aspect lumineux et aéré est conservé)."""
     base = histogram(img)["brules_pct"]["valeur"]
-    lo, hi = -max_ev, max_ev
+    med0 = float(np.median(luminance(img)))
+    if med0 >= target_median:
+        if base <= BRULES_RECUP_PCT:
+            return img, {"ev": 0.0}
+        ev = 0.0
+        while ev > -0.5 and histogram(exposure(img, ev - 0.05))["brules_pct"]["valeur"] > BRULES_RECUP_PCT:
+            ev -= 0.05
+        ev -= 0.05
+        return exposure(img, ev), {"ev": round(ev, 2)}
+    lo, hi = 0.0, max_ev
     for _ in range(25):
         mid = (lo + hi) / 2
         med = float(np.median(luminance(exposure(img, mid))))

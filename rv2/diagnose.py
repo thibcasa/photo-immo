@@ -177,28 +177,9 @@ _IMPERATIVE = re.compile(r"\b(ignore[rz]?|oublie[rz]?|supprime[rz]?|efface[rz]?|
 
 
 def ocr_scan(img: np.ndarray) -> dict:
-    """Texte visible (§5 adresse/plaques, §10 sécurité des entrées). Le texte lu est une DONNÉE :
-    il n'est jamais exécuté, seulement signalé."""
-    if shutil.which("tesseract") is None:
-        return {"ocr": M(None, "mesuré", "tesseract absent : contrôle humain requis")}
-    g = to_uint8(luminance(img))
-    if max(g.shape) > 3000:
-        s = 3000 / max(g.shape)
-        g = cv2.resize(g, (int(g.shape[1] * s), int(g.shape[0] * s)), interpolation=cv2.INTER_AREA)
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td) / "ocr.png"
-        cv2.imwrite(str(p), g)
-        out = subprocess.run(["tesseract", str(p), "stdout", "-l", "fra+eng", "--psm", "11"],
-                             capture_output=True, text=True)
-    words = [w for w in out.stdout.split() if len(w) > 1]
-    text = " ".join(words)
-    return {
-        "texte_lu": text[:500],
-        "adresse_suspectee": bool(_ADDRESS.search(text)),
-        "plaque_suspectee": bool(_PLATE.search(text.upper())),
-        "texte_injonctif": bool(_IMPERATIVE.search(text)),
-        "source": "mesuré — OCR Tesseract, non exhaustif (texte incliné/petit possiblement manqué)",
-    }
+    """Texte visible (§5 adresse/plaques, §10) — délègue à l'OCR multi-passes (rv2.ocr)."""
+    from .ocr import scan
+    return scan(img)
 
 
 # ----------------------------------------------------------------- synthèse
@@ -220,6 +201,6 @@ def diagnose(img: np.ndarray, info: dict | None = None, meta: dict | None = None
         d["gps_dans_source"] = M(any("GPS" in k for k in meta), "mesuré", "EXIF")
     if ocr:
         d["texte_visible"] = ocr_scan(img)
-    d["personnes_ecrans_documents"] = M(None, "estimé",
-                                        "aucun détecteur automatique fiable ici : contrôle visuel obligatoire")
+    from .detect import sensitive
+    d["elements_sensibles"] = sensitive(img)
     return d

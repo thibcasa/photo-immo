@@ -78,8 +78,11 @@ sortie/BIN0421/
 
 | Étape du §6 | Exécuté | Mesuré / garanti |
 |---|---|---|
-| Lecture | RAW/DNG (LibRaw, 16 bits), HEIC (libheif), JPG/PNG, TIFF 16 bits ; conversion ICC → sRGB (Display P3, Adobe RGB…) **avant** tout changement de mode | P3 (230,20,20) → sRGB (250,0,1) vérifié |
-| Diagnostic | % brûlés ≥ 250 / bouchés ≤ 5, inclinaison et convergence des verticales (Hough + régression) avec **indice de fiabilité**, bruit σ (Immerkær), zones molles, qualité JPEG source, focale EXIF, OCR des adresses, plaques et textes injonctifs | température en K toujours **[estimé]** |
+| Lecture | RAW/DNG (LibRaw, 16 bits), HEIC (libheif), JPG/PNG, TIFF 16 bits ; conversion ICC → sRGB (Display P3, Adobe RGB…) **avant** tout changement de mode | P3 (230,20,20) → sRGB (250,0,1) vérifié ; HEIC : rotation `irot` appliquée dans le bon sens et **sans double rotation** avec l'EXIF `Orientation=6` (structure iPhone reproduite sur un fichier de conformité HEIF Nokia, vérifiée à l'œil) |
+| Distorsion d'objectif | profil **Lensfun** si boîtier + objectif connus ; sinon **estimation fil à plomb** (k radial qui maximise les lignes droites), **k commun à la série** (même appareil + focale, médiane pondérée) | k injecté retrouvé à ±0,015 ; appliquée seulement si gain ≥ 10 % et cadre perdu ≤ 15 % ; focale < 14 mm équiv. → « à reprendre » (§4) |
+| Éléments sensibles | **YOLOv10n** (personnes, écrans, ordinateurs, téléphones, documents) en tuiles à 2 échelles + **YuNet** (visages) | visage d'une personne détectée → **flouté automatiquement** ; visage sans personne (œuvre, affiche) → signalé, non flouté ; état d'écran mesuré contre le mur environnant, « éteint » seulement sur preuve forte, sinon « à vérifier » |
+| Diagnostic | % brûlés ≥ 250 / bouchés ≤ 5, inclinaison et convergence des verticales (Hough + régression) avec **indice de fiabilité**, bruit σ (Immerkær), zones molles, qualité JPEG source, focale EXIF, éléments sensibles | température en K toujours **[estimé]** |
+| OCR (adresses, plaques, textes injonctifs) | Tesseract multi-passes : image entière + zones de texte détectées, agrandies ×3, CLAHE, **redressement mesuré** par zone, ±6°, négatif | rappel mesuré sur banc de 24 scènes (tailles 18–44 px, ±12°, plaques claires sur fond sombre, faible contraste) : **20/24 (83 %)** contre 8/24 (33 %) en v2.1 |
 | Verticales | rotation puis perspective (homographie) | appliquées **seulement** si la détection est fiable, la rotation ≤ 3° et le cadre perdu ≤ 15 % ; sinon géométrie d'origine conservée et photo « à reprendre » |
 | Exposition / fusion | EV automatique sans hausse des brûlés > 0,5 pt ; compression douce des hautes lumières ; fusion Mertens alignée MTB | décalages des expositions mesurés en px |
 | Balance des blancs | mire de gris = exacte (écart < 1 %) ; automatique = 35 % du gray-world, gains bornés à ±15 % | la teinte des matériaux est un invariant |
@@ -89,25 +92,24 @@ sortie/BIN0421/
 | Export | JPEG q90, 4:4:4, profil ICC sRGB, **aucune** donnée EXIF, GPS, XMP, IPTC ni commentaire | relu par exiftool après écriture ; fichier supprimé si le contrôle échoue |
 | Nommage | `[USAGE]_[BIEN]_[NN]_[PIECE]_v1.jpg` | refus si BIEN/PIECE ressemble à une adresse (VENTE) |
 | Conformité | staging/travaux/saisonnier refusés en LCD ; staging uniquement en pièce vide, photo vide en NN+1, jamais en couverture ; travaux à côté de l'état réel ; ciel uniquement en extérieur ; ROUGE toujours refusé avec alternative | — |
-| Audit §6.4 | métadonnées, ICC, mention, adresse (OCR), nom : **OK/ÉCHEC calculés** ; au plus 2 boucles | invariants, artefacts et test « visiteur » (si retouche locale) : **« À VALIDER (humain) »**, jamais déclarés OK |
+| Audit §6.4 | **tous les points calculés OK/ÉCHEC** ; au plus 2 boucles. Invariants : corrélation des gradients, rappel des contours, dérive de teinte locale (ΔE a*b*, dérive globale de balance des blancs retirée par tranche de luminance), modifications hors masques déclarés. Artefacts : halo, postérisation, écrêtage ajouté, bruit amplifié. Test « visiteur » : surface + contact avec une ligne structurelle **mesurés** pour chaque suppression | validé : 5 photos réelles retouchées passent ; halo, postérisation, élément effacé, sol recoloré, surexposition sont tous rejetés ; une zone effacée **déclarée** est acceptée |
 | Série | colorimétrie, luminance, focale : photos qui détonnent | — |
 | Vidéo | vid.stab en 2 passes, `eq`, rotation sans coins noirs, mention pendant les plans indiqués, `-map_metadata -1` | durée conservée ; GPS et date de tournage absents (exiftool) ; mention présente dans sa fenêtre et absente ailleurs |
 
-## 4. Ce que l'outil ne fait pas (à faire par l'opérateur)
+## 4. Limites restantes (mesurées, signalées dans chaque rapport)
 
-- **Retouche générative** (ciel, staging, suppression IA) : aucun outil génératif n'est intégré. Ces retouches sont consignées « À EXÉCUTER par l'opérateur ».
-  Le fichier retouché revient ensuite dans la fiche avec `orange` et `outil_generatif` pour recevoir la mention.
-- **Distorsion optique** : pas de base de profils d'objectifs. Le rapport le signale : contrôlez les bords.
-- **Personnes, documents, écrans allumés** : le détecteur de visages d'OpenCV n'est pas utilisable ici (absent d'OpenCV 5, modèle non téléchargeable). Ce contrôle reste **visuel et obligatoire**.
-- **OCR** : non exhaustif. Un texte petit, incliné ou flou peut échapper au contrôle.
-- **Retouches locales fines** (pinceaux, masques de luminosité) : à faire dans Lightroom ou Photoshop, en MODE B.
-- **HEIC** : la rotation suit la boîte `irot` de la norme HEIF ; une étiquette EXIF seule n'est pas prise en compte. C'est conforme à la norme, mais **cela n'a pas été vérifié sur un fichier iPhone réel** : à tester sur votre premier lot.
+- **Retouche générative** (ciel, staging, suppression IA) : non intégrée — consignée « À EXÉCUTER par l'opérateur », puis mention apposée.
+- **OCR** : 83 % de rappel mesuré — un texte minuscule ou très incliné peut encore échapper ; c'est un filet, pas une garantie.
+- **Détection** : un objet très petit ou masqué peut être manqué ; l'état d'un écran vu de profil est souvent « à vérifier » (reflets).
+- **Audit calculé** : les critères sont des mesures de substitution, validées sur cas réels et défauts injectés ; leurs seuils sont techniques (§7).
+- **Licence YOLOv10n** : poids sous AGPL-3.0 (Ultralytics/THU) — usage interne ; à revoir avant toute redistribution ou mise en service web.
+- **DNG via Google Drive** : le connecteur refuse les fichiers > 10 Mo ; les RAW doivent être fournis autrement (dossier local, lien de partage).
 
 ## 5. Tests
 
 ```bash
 tests/fetch_samples.sh                 # DNG public (~48 Mo) + profil Display P3 — non versionnés
-python3 -m pytest -q tests/            # 38 tests
+python3 -m pytest -q tests/            # 52 tests (dont banc OCR ~1 min ; -m "not slow" pour l'exclure)
 ```
 
 Les tests couvrent :
@@ -150,6 +152,13 @@ Le défaut de l'origine est figé dans un test (`test_ancien_script_ecrasait_l_o
 | Contraste de la mention | ≥ 4,5:1 | référence WCAG AA (lisibilité), pas une obligation légale |
 | Décalage maximal entre expositions | 2 % de la largeur | technique, outil |
 | Balance des blancs automatique | 35 %, gains ±15 % | technique, outil (invariant §3) |
+| Distorsion : gain minimal / cadre perdu max | 10 % de lignes droites / 15 % | technique, outil |
+| Focale minimale | 14 mm équiv. | technique, outil (§4 vise 16–24 mm) |
+| Audit : corrélation structure / rappel contours | ≥ 0,90 / ≥ 0,85 | technique, outil |
+| Audit : dérive de teinte locale (p95) | ΔE a*b* ≤ 6 | technique, outil |
+| Audit : halo / niveaux / bruit | ≤ 1,9 / ≥ 0,55 / ≤ 1,5 | technique, outil |
+| Audit : modification hors masques déclarés | ≤ 0,5 % | technique, outil |
+| Suppression « touche la structure » | > 5 % du masque sur une ligne structurelle | technique, outil |
 | Recadrage social maximal | 25 %, au-delà bandes unies | technique, outil |
 
 Pour modifier un seuil : constantes en tête de `rv2/correct.py`, `rv2/export.py` et `rv2/conformity.py`.

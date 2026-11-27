@@ -1,5 +1,6 @@
 """Ligne de commande :
   python -m rv2 selfcheck                  → vérifie que l'environnement permet le MODE A
+  python -m rv2 models                     → télécharge les modèles de détection (visages, objets)
   python -m rv2 diagnose FICHIER...        → diagnostic étiqueté (JSON)
   python -m rv2 run fiche.json             → traitement complet + RAPPORT.md (§9)
   python -m rv2 export SRC DST [qualité]   → export conforme seul (rotation → sRGB/ICC → sans EXIF/GPS/XMP)
@@ -42,6 +43,11 @@ def selfcheck() -> int:
                                                                          text=True).stdout else (_ for _ in ()).throw(RuntimeError("fra absent")))
     from .export import _font_path
     chk("police mention", _font_path)
+    chk("lensfun (profils d'objectifs)", lambda: __import__("lensfunpy").__version__)
+    from .detect import MODELS, SOURCES
+    for n in SOURCES:
+        chk(f"modèle {n}", lambda n=n: f"{(MODELS / n).stat().st_size // 1024} Ko" if (MODELS / n).exists()
+            else (_ for _ in ()).throw(RuntimeError("absent : python -m rv2 models")))
     for name, status, detail in rows:
         print(f"{status:6} {name:28} {detail}")
     print("\nMODE A disponible" if ok else "\nMODE A INCOMPLET → exécuter ./install.sh, sinon MODE B (prescription)")
@@ -52,6 +58,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="rv2", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("selfcheck")
+    sub.add_parser("models")
     d = sub.add_parser("diagnose")
     d.add_argument("fichiers", nargs="+")
     r = sub.add_parser("run")
@@ -72,6 +79,10 @@ def main(argv=None) -> int:
 
     if a.cmd == "selfcheck":
         return selfcheck()
+    if a.cmd == "models":
+        from .detect import fetch_models
+        print(fetch_models())
+        return 0
     if a.cmd == "diagnose":
         from .diagnose import diagnose
         from .io import load_image, read_metadata

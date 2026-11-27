@@ -9,6 +9,9 @@ import cv2
 import numpy as np
 
 from . import correct as C
+from . import optics as O
+from .audit import audit as measured_audit
+from .detect import face_blur_rects
 from .conformity import build_name, classify_photo, classify_removal
 from .diagnose import diagnose, estimate_cct, histogram, noise_sigma, ocr_scan
 from .export import export_all
@@ -48,7 +51,22 @@ def _side_by_side(a: np.ndarray, b: np.ndarray, path: Path) -> None:
     save_jpeg(np.concatenate([ra, sep, rb], axis=1), path, quality=85)
 
 
-def process_photo(p: dict, job: dict, out: Path) -> dict:
+def _touches_structure(ref: np.ndarray, mask: np.ndarray) -> float:
+    """Part du masque posée sur une ligne structurelle (mur, sol, ouverture) [mesuré] :
+    longues lignes droites (Hough) de la référence, épaissies à 5 px."""
+    from .diagnose import luminance as _lum
+    from .io import to_uint8 as _u8
+    g = _u8(_lum(ref))
+    e = cv2.Canny(cv2.GaussianBlur(g, (3, 3), 0), 40, 120)
+    lines = cv2.HoughLinesP(e, 1, np.pi / 360, 80, minLineLength=int(0.08 * max(g.shape)), maxLineGap=5)
+    lm = np.zeros(g.shape, np.uint8)
+    for x1, y1, x2, y2 in (np.asarray(lines).reshape(-1, 4) if lines is not None else []):
+        cv2.line(lm, (int(x1), int(y1)), (int(x2), int(y2)), 255, 5)
+    m = mask > 0
+    return float((lm[m] > 0).mean()) if m.any() else 0.0
+
+
+def process_photo(p: dict, job: dict, out: Path, k_serie: float | None = None) -> dict:
     usage = job["usage"].upper()
     src = Path(job.get("base_dir", ".")) / p["fichier"]
     row = {"nn": p["nn"], "piece": p["piece"], "source": src.name, "retouches": [], "refus": [],
@@ -77,7 +95,26 @@ def process_photo(p: dict, job: dict, out: Path) -> dict:
     # masques désignés sur l'original (après rotation EXIF)
     sup = p.get("suppressions", [])
     masks = [_load_mask(Path(job.get("base_dir", ".")) / s["masque"], img.shape) for s in sup]
-    blur_mask = _rect_mask(p.get("flous", []), img.shape)
+    det = row["diagnostic"].get("elements_sensibles", {})
+    face_rects = face_blur_rects(det) if det.get("disponible") else []
+    blur_mask = _rect_mask(list(p.get("flous", [])) + face_rects, img.shape)
+    if not det.get("disponible"):
+        row["alertes"].append("détecteur d'éléments sensibles indisponible : contrôle visuel personnes/écrans")
+    else:
+        if det["personnes"]:
+            row["alertes"].append(f"{det['personnes']} personne(s) visible(s) : visage(s) flouté(s) 🟢 ; "
+                                  "silhouette → suppression à exécuter par l'opérateur ou autorisation écrite (RGPD)")
+            row["a_reprendre"].append("personne dans le champ")
+        if face_rects:
+            row["retouches"].append(f"floutage automatique de {len(face_rects)} visage(s) détecté(s) 🟢")
+        if det["visages_oeuvre_probable"]:
+            row["alertes"].append(f"{len(det['visages_oeuvre_probable'])} visage(s) sans personne détectée "
+                                  "(œuvre/affiche probable) : non floutés")
+        for e in det["ecrans_a_verifier"]:
+            row["alertes"].append(f"écran détecté ({e['classe']}, score {e['score']}) : {e['etat']} — "
+                                  "si allumé : `ecrans_tv` pour le mettre au noir 🟢")
+        if det["documents"]:
+            row["alertes"].append(f"{len(det['documents'])} document(s)/livre(s) détecté(s) : vérifier données personnelles")
     tv_masks = []
     for poly in p.get("ecrans_tv", []):
         m = np.zeros(img.shape[:2], np.uint8)
@@ -85,9 +122,8 @@ def process_photo(p: dict, job: dict, out: Path) -> dict:
         tv_masks.append(m)
     extras = tuple(masks + [blur_mask] + tv_masks)
 
-    # -- 3. EXÉCUTION (ordre §6.3)
-    # optique/distorsion : profil d'objectif non disponible → non corrigée automatiquement (signalé)
-    row["retouches"].append("optique/distorsion : non corrigée (pas de profil d'objectif) — contrôle visuel des bords")
+    # -- 3. EXÉCUTION (ordre §6.3 ; la fusion, tonale, précède la géométrie pour que toutes les vues
+    #    partagent exactement la même transformation)
     if p.get("brackets"):
         imgs = [img] + [load_image(Path(job.get("base_dir", ".")) / b)[0] for b in p["brackets"]]
         if len({i.shape for i in imgs}) != 1:
@@ -106,6 +142,13 @@ def process_photo(p: dict, job: dict, out: Path) -> dict:
     elif row["diagnostic"]["brules_pct"]["valeur"] > 2.0:
         row["alertes"].append("fenêtres/zones brûlées sans bracketing : on n'invente pas la vue ; "
                               "si la vue est un argument de vente → À REPRENDRE en bracketing (§3)")
+    # optique / distorsion
+    if p.get("distorsion", True):
+        img, orep, extras = O.correct(img, meta, k_serie, extras)
+        row["optique"] = orep
+        row["retouches"] += [a + (" 🟢" if orep.get("appliquee") else "") for a in orep["actions"]]
+        row["a_reprendre"] += orep["a_reprendre"]
+    # verticales / perspective
     if p.get("redresser", True):
         img, srep, extras = C.straighten(img, extras) if extras else (*C.straighten(img), ())
         row["verticales"] = srep
@@ -113,6 +156,7 @@ def process_photo(p: dict, job: dict, out: Path) -> dict:
         row["a_reprendre"] += srep["a_reprendre"]
     extras = list(extras)
     masks, blur_mask, tv_masks = extras[:len(masks)], extras[len(masks)], extras[len(masks) + 1:]
+    geo_ref = img.copy()   # référence d'audit : uniquement les transformations géométriques
 
     expo = p.get("exposition", "auto")
     if expo == "auto":
@@ -134,7 +178,12 @@ def process_photo(p: dict, job: dict, out: Path) -> dict:
     before_local = img.copy()
     for s, m in zip(sup, masks):
         zone = float((m > 0).mean() * 100)
-        classe, key = classify_removal(zone, s.get("touche_structure", True), s.get("generatif", False))
+        part_struct = _touches_structure(geo_ref, m)
+        touche = bool(s.get("touche_structure", False)) or part_struct > 0.05
+        classe, key = classify_removal(zone, touche, s.get("generatif", False))
+        row.setdefault("suppressions_mesures", []).append(
+            {"objet": s.get("objet"), "zone_pct": round(zone, 3), "part_sur_ligne_structurelle": round(part_struct, 3),
+             "touche_structure": touche, "classe": classe})
         if s.get("generatif"):
             row["retouches"].append(f"suppression « {s.get('objet', '?')} » ({zone:.2f} %) : outil génératif → "
                                     f"À EXÉCUTER par l'opérateur ({s.get('outil', 'outil non précisé')})")
@@ -177,11 +226,17 @@ def process_photo(p: dict, job: dict, out: Path) -> dict:
     # -- export + 4. AUTO-AUDIT + 5. CORRECTION (≤ 2 boucles)
     name = build_name(usage, job["bien"], p["nn"], p["piece"])
     formats = job.get("formats", ["principal"])
+    local = np.zeros(img.shape[:2], np.uint8)
+    for m in list(masks) + [blur_mask] + list(tv_masks):
+        if m is not None:
+            local |= (m > 0).astype(np.uint8)
+    mesure = measured_audit(geo_ref, img, local)
+    row["audit_mesures"] = mesure
     for boucle in range(1, BOUCLES_MAX + 1):
         exports = export_all(img, out, name, usage, formats, mention, p.get("centre_x", 0.5))
-        audit = _audit(img, exports, mention, usage, name, has_local=bool(sup or tv_masks or rects or orange))
+        audit = _audit(img, exports, mention, usage, name, mesure, row)
         row["boucles"] = boucle
-        if not any(v == "ÉCHEC" for v in audit.values() if isinstance(v, str)):
+        if not any(str(v).startswith("ÉCHEC") for v in audit.values()):
             break
     row["exports"] = exports
     row["audit"] = audit
@@ -189,7 +244,7 @@ def process_photo(p: dict, job: dict, out: Path) -> dict:
     _side_by_side(load_image(src)[0], img, out / "controle" / f"COMPARE_{name}")
     row["comparaison"] = f"controle/COMPARE_{name}"
     row["final"] = {**histogram(img), **estimate_cct(img)}
-    fails = [k for k, v in audit.items() if v == "ÉCHEC"]
+    fails = [k for k, v in audit.items() if str(v).startswith("ÉCHEC")]
     if fails or row["a_reprendre"] or any("dégradée" in a for a in row["alertes"]):
         row["statut"] = "⚠️"
     else:
@@ -198,21 +253,29 @@ def process_photo(p: dict, job: dict, out: Path) -> dict:
     return row
 
 
-def _audit(img, exports, mention, usage, name, has_local: bool) -> dict:
-    a = {"invariants_§3": HUMAIN,
-         "test_unique_§5": "OK (retouches globales VERT uniquement)" if not has_local else HUMAIN,
-         "artefacts": HUMAIN}
+def _audit(img, exports, mention, usage, name, mesure: dict, row: dict) -> dict:
+    """§6.4 : chaque point est CALCULÉ (OK/ÉCHEC) — voir rv2/audit.py pour les critères et seuils."""
+    a = {"invariants_§3": mesure["invariants_§3"], "artefacts": mesure["artefacts"]}
+    sup = row.get("suppressions_mesures", [])
+    bad = [x for x in sup if x["classe"] != "VERT"]
+    if bad and not mention:
+        a["test_unique_§5"] = "ÉCHEC [mesuré] : retouche locale hors VERT sans mention"
+    else:
+        a["test_unique_§5"] = ("OK [mesuré] : " + ("retouches globales VERT uniquement" if not sup else
+                               "suppressions classées sur surface et contact structurel mesurés")
+                               + (" ; ORANGE avec mention" if mention else ""))
     livrables = [e for e in exports if e.get("livrable")]
     if mention:
         ok = all(e.get("mention", {}).get("conforme") for e in livrables) and len(livrables) == len(exports)
-        a["mention_orange"] = "OK" if ok and livrables else "ÉCHEC"
+        a["mention_orange"] = "OK [mesuré]" if ok and livrables else "ÉCHEC"
     else:
         a["mention_orange"] = "sans objet"
     if usage == "VENTE":
         ocr = ocr_scan(img)
-        a["adresse_image_ocr"] = "ÉCHEC" if ocr.get("adresse_suspectee") else "OK (OCR, non exhaustif)"
+        a["adresse_image_ocr"] = "ÉCHEC" if ocr.get("adresse_suspectee") or ocr.get("plaque_suspectee") \
+            else "OK [mesuré, OCR rappel banc 83 %]"
         a["nom_fichier_sans_adresse"] = "OK"  # build_name lève une erreur sinon
-    a["metadonnees_icc"] = "OK" if livrables and all(
+    a["metadonnees_icc"] = "OK [mesuré]" if livrables and all(
         e["controle_fichier"]["metadonnees_ok"] and e["controle_fichier"]["icc_srgb"] for e in livrables) else "ÉCHEC"
     a["orientation"] = "OK (rotation EXIF appliquée aux pixels, aucune balise Orientation livrée)"
     return a
@@ -255,10 +318,27 @@ def run_job(job_path: str | Path) -> dict:
     hyp = list(job.get("hypotheses", []))
     if not job.get("contexte_complet", False):
         hyp.append("contexte incomplet : hypothèse la plus stricte (retouches VERT uniquement hors demandes explicites)")
+    # distorsion : coefficient commun par appareil + focale (§4 cohérence de série)
+    groups: dict = {}
+    for p in job["photos"]:
+        if not p.get("distorsion", True):
+            continue
+        try:
+            src = Path(job["base_dir"]) / p["fichier"]
+            meta = read_metadata(src)
+            key = (meta.get("IFD0:Make"), meta.get("IFD0:Model"), meta.get("ExifIFD:FocalLength"))
+            groups.setdefault(key, []).append((p["nn"], O.estimate_k(load_image(src)[0])))
+        except Exception:
+            continue
+    k_by_nn = {}
+    for key, lst in groups.items():
+        ks = O.series_k([e for _, e in lst]) if len(lst) >= 3 else None
+        for nn, _ in lst:
+            k_by_nn[nn] = ks
     rows = []
     for p in sorted(job["photos"], key=lambda x: x["nn"]):
         try:
-            rows.append(process_photo(p, job, out))
+            rows.append(process_photo(p, job, out, k_by_nn.get(p["nn"])))
         except Exception as exc:  # une photo en échec ne bloque pas la série — mais n'est pas livrable
             rows.append({"nn": p["nn"], "piece": p.get("piece", "?"), "statut": "⚠️", "erreur": str(exc),
                          "a_reprendre": [], "refus": [], "retouches": [], "audit": {}})
