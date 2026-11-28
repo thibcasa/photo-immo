@@ -21,7 +21,19 @@ pillow_heif.register_heif_opener()
 
 RAW_EXT = {".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2", ".pef", ".srw", ".3fr", ".iiq"}
 SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB"))
-SRGB_ICC = SRGB_PROFILE.tobytes()
+
+
+def _deterministic_icc(raw: bytes) -> bytes:
+    """LittleCMS horodate le profil à sa création (en-tête ICC, octets 24–35) : deux exports identiques
+    différaient donc d'octets (constaté). On met la date et l'identifiant MD5 (84–99, « 0 = non calculé »
+    selon la norme ICC) à zéro : exports reproductibles, aucune date de traitement embarquée."""
+    b = bytearray(raw)
+    b[24:36] = bytes(12)
+    b[84:100] = bytes(16)
+    return bytes(b)
+
+
+SRGB_ICC = _deterministic_icc(SRGB_PROFILE.tobytes())
 
 
 class Rv2Error(RuntimeError):

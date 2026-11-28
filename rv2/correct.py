@@ -111,8 +111,8 @@ def straighten(img: np.ndarray, extras: tuple = ()):
         return (img, rep, list(extras_in)) if extras_in else (img, rep)
 
     if before["inclinaison_deg"]["valeur"] is None or not before.get("fiable"):
-        return keep_original("verticales non mesurables de façon fiable (gros plan, peu de lignes droites) : "
-                             "aucune correction automatique — contrôle visuel")
+        return keep_original("verticales non mesurables de façon fiable (lignes droites trop peu nombreuses ou "
+                             "discordantes) : aucune correction automatique — contrôle visuel")
     tilt = before["_tilt"]
     if abs(tilt) > ROTATION_MAX_DEG:
         rep["a_reprendre"].append(f"inclinaison {abs(tilt):.1f}° > {ROTATION_MAX_DEG}° (§4)")

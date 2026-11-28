@@ -139,3 +139,17 @@ def test_exposition_ne_assombrit_pas_une_photo_lumineuse():
     assert rep["ev"] == 0.0 and out is img
     sombre, rep2 = C.auto_exposure(room() * 0.35)
     assert rep2["ev"] > 0.5
+
+
+def test_export_reproductible_sans_date_icc(tmp_path):
+    """Constaté : deux exports identiques différaient par la date de création du profil ICC."""
+    import time
+    from rv2.io import save_jpeg, read_metadata, verify_delivered_file
+    img = room(600, 400)
+    save_jpeg(img, tmp_path / "a.jpg")
+    time.sleep(1.1)
+    save_jpeg(img, tmp_path / "b.jpg")
+    assert (tmp_path / "a.jpg").read_bytes() == (tmp_path / "b.jpg").read_bytes()
+    m = read_metadata(tmp_path / "a.jpg")
+    assert str(m.get("ICC-header:ProfileDateTime", "0000")).startswith("0000")
+    assert verify_delivered_file(tmp_path / "a.jpg")["icc_srgb"]
